@@ -4,6 +4,110 @@ require 'optparse'
 require 'fileutils'
 require 'pathname'
 require 'time'
+require 'forwardable'
+
+class Build
+  include Comparable
+  extend Forwardable
+
+  def self.from_path(path)
+    path = Pathname.new path
+
+    case path.basename.to_s
+    when /^(\d+)$/
+      NumberedBuildLink.new path
+    when /^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$/
+      DatedBuild.new path
+    else
+      nil
+    end
+  end
+
+  attr_reader :path
+
+  def_delegators(
+    :path,
+    :symlink?,
+    :directory?,
+    :exist?,
+    :unlink,
+    :rmtree,
+    :readlink
+  )
+
+  def initialize(path)
+    @path = path
+  end
+
+  def to_i
+    number
+  end
+end
+
+class NumberedBuildLink < Build
+  attr_accessor :number
+  def_delegator :date_build, :time
+
+  def initialize(path)
+    super
+    @number = Integer(path.basename.to_s)
+  end
+
+  def <=>(other)
+    number <=> other.number
+  end
+
+  def date_build
+    @date_build ||= DatedBuild.new path.readlink.relative? ? path.dirname + path.readlink : path.readlink
+  end
+
+  def to_s
+    path.symlink? ? "#{path} -> #{readlink}" : path.to_s
+  end
+end
+
+class DatedBuild < Build
+  attr_accessor :time
+
+  def initialize(path)
+    super
+    m = path.basename.to_s.match(/^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})$/)
+    @time = Time.parse("#{m[1]} #{m[2]}:#{m[3]}:#{m[4]}") if m
+  end
+
+  def <=>(other)
+    time <=> other.time
+  end
+
+  def number
+    @number ||= fail 'fetch from xml'
+  end
+
+  def date_build
+    self
+  end
+
+  def to_s
+    path.to_s
+  end
+end
+
+class Solution
+  attr_reader :message
+
+  def initialize(message, &block)
+    @message = message
+    @block = block
+  end
+
+  def solve
+    @block.call
+  end
+
+  def to_s
+    message
+  end
+end
 
 # Comment
 class Job
@@ -24,12 +128,13 @@ class Job
     @numbers = []
 
     builds_path.children.each do |child|
-      case child.basename.to_s
-      when /^(\d+)$/
-        @numbers << Integer(Regexp.last_match(1))
-      when /^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})$/
-        m = Regexp.last_match
-        @dates << Time.parse("#{m[1]} #{m[2]}:#{m[3]}:#{m[4]}")
+      build = Build.from_path(child)
+
+      case build
+      when NumberedBuildLink
+        @numbers << build
+      when DatedBuild
+        @dates << build
       end
     end
 
@@ -44,24 +149,34 @@ class Job
     end
 
     problems.length > 0
-    # assert dates.map(&:number).length == dates.map(&:number).uniq.length
   end
 
   def next_build_number
     @next_build_number ||= Integer((path + 'nextBuildNumber').read)
   end
 
-  def problem(message)
-    @problems << message
+  def problem(type, message)
+    @problems << "#{type}: #{message}"
   end
 
-  def solution(&block)
-    @solutions << block
+  def solution(message, &block)
+    @solutions << Solution.new(message, &block)
+  end
+
+  def dumping_ground
+    @dumping_group ||= (path + 'outOfOrderBuilds').tap do |p|
+      p.mkdir unless p.exist?
+    end
+  end
+
+  def archive(path)
+    path = path.path if path.respond_to? :path
+    path.rename(dumping_ground + path.basename)
   end
 
   def test_is_a_job_directory
     unless (path + 'config.xml').exist?
-      problem "#{path} is not a job directory; 'config.xml' is missing."
+      problem :NOJOB, "#{path} is not a job directory; 'config.xml' is missing."
     end
   end
 
@@ -69,9 +184,9 @@ class Job
     links = %w(lastFailedBuild lastStableBuild lastSuccessfulBuild lastUnstableBuild lastUnsuccessfulBuild)
 
     links.map { |l| builds_path + l }.select { |p| !p.symlink? && p.exist? }.each do |path|
-      problem "#{path} should be a symlink but isn't."
+      problem :NOTLINK, "#{path} should be a symlink but isn't."
 
-      solution do
+      solution("Relink #{path}") do
         path.rmtree if path.directory?
         path.unlink if path.exist?
         File.symlink '-1', path.to_s
@@ -80,47 +195,33 @@ class Job
   end
 
   def test_numbers_are_not_files
-    numbers.each do |n|
-      link = builds_path + n.to_s
-      problem "The number link #{link} is not a symlink!" unless link.symlink?
+    numbers.reject(&:symlink?).each do |number|
+      problem :NOTLINK, "The number link #{number} is not a symlink!"
+      solution("Archive #{number}") { archive number }
     end
   end
 
   def test_broken_number_link
-    # numbers.map(&:link?).reduce(true) { |a, e| a && e }
-    numbers.map { |n| builds_path + n.to_s }.reject(&:exist?).each do |link|
-      problem "The number link #{link} is broken."
-      solution { link.unlink if link.exist? }
+    numbers.reject(&:exist?).each do |number|
+      problem :BROKEN, "The number link #{number} is broken."
+      solution("Unlink #{number}") { number.unlink }
     end
   end
 
   def test_dates_for_numbers_are_in_order
-    valid_numbers_paths = numbers.map { |n| builds_path + n.to_s }.select(&:symlink?).select(&:exist?)
+    valid_numbers = numbers.select(&:symlink?).select(&:exist?)
 
-    valid_numbers_dates = valid_numbers_paths.map do |path|
-      m = path.readlink.basename.to_s.match(/^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})$/)
-      Time.parse("#{m[1]} #{m[2]}:#{m[3]}:#{m[4]}")
-    end
-
-    numbers_paths_and_dates = valid_numbers_paths.zip(valid_numbers_dates)
-
-    numbers_paths_and_dates.each_with_index do |path_and_date, i|
-      path, date = path_and_date
-      if date > numbers_paths_and_dates.map(&:last)[i..-1].min
-        problem "The link #{path} -> #{path.readlink} is out of order."
+    valid_numbers.each_with_index do |number, i|
+      if number.time > valid_numbers.map(&:time)[i..-1].min
+        problem :ORDER, "The link #{number} is out of order."
+        solution("Archive #{number}") { archive number }
       end
     end
-    # if numbers_dates != numbers_dates.sort
-    #   problem "The number links are out of order!"
-    # end
   end
 
-  def test_numbers_equals_dates
-    # assert dates.length == numbers.length
-    if dates.length > numbers.length
-      problem 'There are more dates files than numbers files.'
-    elsif dates.length < numbers.length
-      problem 'There are more numbers files than dates files.'
+  def test_dates_without_numbers
+    (dates.map(&:to_s) - numbers.select(&:symlink?).map(&:date_build).map(&:to_s)).each do |date|
+      problem :NONUM, "The following date build doesn't have a matching number link: #{date}"
     end
   end
 
@@ -128,9 +229,12 @@ class Job
     # assert next_build_number == numbers.sort.last + 1
     return if dates.empty? && numbers.empty?
     given = next_build_number
-    expected = numbers.last + 1
+    expected = numbers.last.to_i + 1
     if given < expected
-      problem "The nextBuildNumber is set to #{given} but I expected at least #{expected}"
+      problem :NEXT, "The nextBuildNumber is set to #{given} but I expected at least #{expected}"
+      solution('Reset nextBuildNumber') do
+        File.open(path + 'nextBuildNumber', 'w') { |f| f.puts expected }
+      end
     end
   end
 end
@@ -183,13 +287,15 @@ if $PROGRAM_NAME == __FILE__
       puts
       puts "Found #{count} problems."
 
-      if :destroy == mode
-        puts
-        puts '**** SOLUTIONS ****'
-        all_solutions.keys.sort.each do |key|
-          print "Fixing #{key}: "
-          all_solutions[key].each { |solution| solution.call }
-          puts 'done.'
+      puts
+      puts '**** SOLUTIONS ****'
+      all_solutions.keys.sort.each do |key|
+        unless all_solutions[key].empty?
+          puts "#{key}: "
+          all_solutions[key].each do |solution|
+            puts " * #{solution}"
+            solution.solve if :destroy == mode
+          end
         end
       end
     else

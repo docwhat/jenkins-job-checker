@@ -1,8 +1,12 @@
+ClassLength:
+  Enabled: false
 MethodLength:
   Enabled: false
 MultilineBlockChain:
   Enabled: false
 BlockNesting:
+  Enabled: false
+Documentation:
   Enabled: false
 LineLength:
   Max: 120
