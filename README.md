@@ -42,3 +42,5 @@ See Also:
     completion](https://issues.jenkins-ci.org/browse/JENKINS-15156)
 -   [Duplicate build numbers in the Build
     History](https://issues.jenkins-ci.org/browse/JENKINS-11853)
+-   [Builds and workspace disappear for jobs created after upgrade to
+    1.487](https://issues.jenkins-ci.org/browse/JENKINS-15719)
