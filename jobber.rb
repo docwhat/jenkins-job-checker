@@ -161,7 +161,7 @@ if $PROGRAM_NAME == __FILE__
       if job.problem?
         all_problems[File.basename path] = job.problems
         all_solutions[File.basename path] = job.solutions unless job.solutions.empty?
-        print '!'
+        print '*'
       else
         print '.'
       end
