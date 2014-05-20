@@ -5,6 +5,8 @@ require 'fileutils'
 require 'pathname'
 require 'time'
 require 'forwardable'
+require 'set'
+require 'rexml/document'
 
 class Build
   include Comparable
@@ -32,11 +34,20 @@ class Build
     :exist?,
     :unlink,
     :rmtree,
-    :readlink
+    :readlink,
+    :realpath
   )
 
   def initialize(path)
     @path = path
+  end
+
+  def hash
+    realpath.hash
+  end
+
+  def eql?(other)
+    realpath == other.realpath
   end
 
   def to_i
@@ -53,12 +64,16 @@ class NumberedBuildLink < Build
     @number = Integer(path.basename.to_s)
   end
 
-  def <=>(other)
-    number <=> other.number
-  end
-
   def date_build
     @date_build ||= DatedBuild.new path.readlink.relative? ? path.dirname + path.readlink : path.readlink
+  end
+
+  def number_build
+    self
+  end
+
+  def <=>(other)
+    number <=> other.number
   end
 
   def to_s
@@ -75,20 +90,28 @@ class DatedBuild < Build
     @time = Time.parse("#{m[1]} #{m[2]}:#{m[3]}:#{m[4]}") if m
   end
 
-  def <=>(other)
-    time <=> other.time
-  end
-
   def number
-    @number ||= fail 'fetch from xml'
+    @number ||= Integer(REXML::XPath.first(build_xml, '/*/number').text)
   end
 
   def date_build
     self
   end
 
+  def number_build
+    @date_build ||= NumberedBuildLink.new path.dirname + number.to_s
+  end
+
+  def <=>(other)
+    time <=> other.time
+  end
+
   def to_s
     path.to_s
+  end
+
+  def build_xml
+    @build_xml ||= REXML::Document.new((path + 'build.xml').read)
   end
 end
 
@@ -197,7 +220,7 @@ class Job
   def test_numbers_are_not_files
     numbers.reject(&:symlink?).each do |number|
       problem :NOTLINK, "The number link #{number} is not a symlink!"
-      solution("Archive #{number}") { archive number }
+      solution("Archive non-link #{number}") { archive number }
     end
   end
 
@@ -214,14 +237,25 @@ class Job
     valid_numbers.each_with_index do |number, i|
       if number.time > valid_numbers.map(&:time)[i..-1].min
         problem :ORDER, "The link #{number} is out of order."
-        solution("Archive #{number}") { archive number }
+        solution("Archive out-of-order #{number}") { archive number }
       end
     end
   end
 
   def test_dates_without_numbers
-    (dates.map(&:to_s) - numbers.select(&:symlink?).map(&:date_build).map(&:to_s)).each do |date|
-      problem :NONUM, "The following date build doesn't have a matching number link: #{date}"
+    missing_links = Set.new(dates) - Set.new(numbers.select(&:symlink?).map(&:date_build))
+    missing_links.each do |date|
+      if date.number_build.exist? && date.number_build.date_build != date
+        problem :STOLEN, "The date build #{date} had its number stolen by #{date.number_build}"
+        solution("Relink #{date.number} to #{date}") do
+          date.number_build.unlink
+          File.symlink date.path.basename.to_s, date.number_build.path.to_s
+        end
+        solution("Archive newer build #{date.number_build.date_build}") { archive date.number_build.date_build }
+      else
+        problem :NONUM, "The following date build doesn't have a matching number link: #{date}"
+        solution("Archive unlinked #{date}") { archive date }
+      end
     end
   end
 
