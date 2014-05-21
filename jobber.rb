@@ -52,12 +52,14 @@ class Build
   def_delegators(
     :path,
     :symlink?,
+    :file?,
     :directory?,
     :exist?,
     :unlink,
     :rmtree,
     :readlink,
-    :realpath
+    :realpath,
+    :realdirpath
   )
 
   def initialize(path)
@@ -65,7 +67,7 @@ class Build
   end
 
   def hash
-    realpath.hash
+    realdirpath.hash
   end
 
   def eql?(other)
@@ -270,7 +272,7 @@ class Job
       if date.number_build.exist? && date.number_build.date_build != date
         problem :STOLEN, "The date build #{date} had its number stolen by #{date.number_build}"
         solution("Relink #{date.number} to #{date}") do
-          date.number_build.unlink
+          date.number_build.unlink if date.number_build.symlink? || date.number_build.file?
           File.symlink date.path.basename.to_s, date.number_build.path.to_s
         end
         solution("Archive newer build #{date.number_build.date_build}") { archive date.number_build.date_build }
