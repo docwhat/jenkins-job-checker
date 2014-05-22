@@ -356,8 +356,12 @@ if $PROGRAM_NAME == __FILE__
           end
         end
       end
+
+      exit 1
     else
       puts 'No problems!'
+
+      exit 0
     end
   else
     fail "You need to give me a 'build' style directory."
