@@ -23,6 +23,7 @@
 # SOFTWARE.
 
 require 'optparse'
+require 'stringio'
 require 'fileutils'
 require 'pathname'
 require 'time'
@@ -36,6 +37,7 @@ class Build
 
   def self.from_path(path)
     path = Pathname.new path
+    return nil unless path.exist?
 
     case path.basename.to_s
     when /^(\d+)$/
@@ -135,7 +137,8 @@ class DatedBuild < Build
   end
 
   def build_xml
-    @build_xml ||= REXML::Document.new((path + 'build.xml').read)
+    build_xml_path = path + 'build.xml'
+    @build_xml ||= build_xml_path.file? ? REXML::Document.new(build_xml_path.read) : nil
   end
 end
 
@@ -170,9 +173,15 @@ class Job
     path + 'builds'
   end
 
+  def name
+    path.basename.to_s
+  end
+
   def scan_builds
     @dates = []
     @numbers = []
+
+    return unless builds_path.directory?
 
     builds_path.children.each do |child|
       build = Build.from_path(child)
@@ -297,73 +306,122 @@ class Job
   end
 end
 
-if $PROGRAM_NAME == __FILE__
-  $stdout.sync = true # unbuffered output
+class Application
+  attr_reader :args, :verbosity, :mode
 
-  mode = :seek
+  def initialize(args)
+    @args = args
+    @mode = :seek
+    @verbosity = :all
+    @job_paths = []
+  end
 
-  OptionParser.new do |opts|
-    opts.banner = 'Usage: jobber.rb [options]'
+  def parser
+    OptionParser.new do |opts|
+      opts.banner = 'Usage: jobber.rb [options]'
 
-    opts.on('-s', '--solve', 'Try to automagically solve the problems') do
-      mode = :destroy
+      opts.on('-q', '--quiet', 'Only display anything if there are errors.') do
+        @verbosity = :problems
+      end
+
+      opts.on('-s', '--solve', 'Try to automagically solve the problems') do
+        @mode = :destroy
+      end
     end
-  end.parse!
+  end
 
-  if ARGV.map { |p| File.directory? p }.reduce(true) { |a, e| a && e }
+  def check_job_paths
+    bad = 0
+    @job_paths.each do |path|
+      unless path.directory?
+        bad += 1
+        $stderr.puts "'#{path}' is not a directory."
+      end
+    end
+    fail 'I need directories to scan!' if bad > 0
+  end
+
+  def jobs
+    @jobs ||= @job_paths.map { |p| Job.new p }
+  end
+
+  def problems?
+    @problem_count > 0
+  end
+
+  def scan
+    @problem_count = 0
     print 'Scanning: '
-    all_problems = {}
-    all_solutions = {}
-    ARGV.each do |path|
-      job = Job.new path
+    jobs.each do |job|
       job.scan_builds
       # p job
       # p job.next_build_number
 
       if job.problem?
-        all_problems[File.basename path] = job.problems
-        all_solutions[File.basename path] = job.solutions unless job.solutions.empty?
+        @problem_count += 1
         print '*'
       else
         print '.'
       end
     end
     puts
-
-    if all_problems.length > 0
-      count = 0
-      puts
-      puts '**** PROBLEMS ****'
-      all_problems.keys.sort.each do |key|
-        puts "#{key}:"
-        all_problems[key].each do |problem|
-          puts " * #{problem}"
-          count += 1
-        end
-      end
-
-      puts
-      puts "Found #{count} problems."
-
-      puts
-      puts '**** SOLUTIONS ****'
-      all_solutions.keys.sort.each do |key|
-        unless all_solutions[key].empty?
-          puts "#{key}: "
-          all_solutions[key].each do |solution|
-            puts " * #{solution}"
-            solution.solve if :destroy == mode
-          end
-        end
-      end
-
-      exit 1
-    else
-      puts 'No problems!'
-
-      exit 0
-    end
-  else
-    fail "You need to give me a 'build' style directory."
   end
+
+  def solve
+    return unless problems?
+
+    puts
+    if mode == :destroy
+      puts '**** SOLUTIONS ****'
+      soln_str = 'Solving with: '
+    else
+      puts '**** PROBLEMS ****'
+      soln_str = 'Proposal: '
+    end
+
+    jobs.each do |job|
+      if job.problem?
+        puts "#{job.name}:"
+        job.problems.each do |problem|
+          puts " Problem: #{problem}"
+        end
+        job.solutions.each do |solution|
+          puts " #{soln_str}: #{solution}"
+          solution.solve if :destroy == mode
+        end
+      end
+    end
+
+    puts
+    puts "Found #{@problem_count} problem jobs."
+  end
+
+  def run
+    @job_paths = parser.parse!(args).uniq.map { |p| Pathname.new p }
+
+    check_job_paths
+
+    begin
+      @original_stdout = $stdout
+      if verbosity == :all
+        $stdout.sync = true # unbuffered output
+      else
+        $stdout = @stored_stdout = StringIO.new
+      end
+
+      scan
+      solve
+    ensure
+      $stdout = @original_stdout
+      print @stored_stdout.string if problems? && verbosity != :all
+    end
+
+    problems?
+  end
+end
+
+if $PROGRAM_NAME == __FILE__
+  app = Application.new(ARGV)
+  app.run
+  exit(app.problems? ? 1 : 0)
 end
