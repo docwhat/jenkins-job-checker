@@ -171,6 +171,7 @@ class Job
     @path = Pathname.new path
     @problems = []
     @solutions = []
+    @has_problems = :unset
   end
 
   def builds_path
@@ -203,12 +204,15 @@ class Job
   end
 
   def problem?
-    tests = methods.select { |m| m.to_s.start_with? 'test_'  }
-    tests.each do |m|
-      send m
-    end
+    if @has_problems == :unset
+      tests = methods.select { |m| m.to_s.start_with? 'test_'  }
+      tests.each do |m|
+        send m
+      end
 
-    problems.length > 0
+      @has_problems = problems.length > 0
+    end
+    @has_problems
   rescue
     $stderr.puts "Error while checking for problems in #{name}"
     raise
