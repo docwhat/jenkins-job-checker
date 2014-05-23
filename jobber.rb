@@ -37,7 +37,7 @@ class Build
 
   def self.from_path(path)
     path = Pathname.new path
-    return nil unless path.exist?
+    return nil unless path.exist? || path.symlink?
 
     case path.basename.to_s
     when /^(\d+)$/
@@ -60,6 +60,7 @@ class Build
     :unlink,
     :rmtree,
     :readlink,
+    :rename,
     :basename,
     :realpath,
     :realdirpath
@@ -78,7 +79,7 @@ class Build
   end
 
   def eql?(other)
-    realpath == other.realpath
+    realdirpath == other.realdirpath
   end
 
   def to_i
@@ -307,7 +308,10 @@ class Job
     valid_numbers.each_with_index do |number, i|
       if number.time > valid_numbers.map(&:time)[i..-1].min
         problem :ORDER, "The link #{number} is out of order."
-        solution("Archive out-of-order #{number}") { archive number }
+        solution("Archive out-of-order #{number}") do
+          archive number.date_build
+          archive number
+        end
       end
     end
   end
@@ -319,8 +323,8 @@ class Job
         if date.number_build.symlink?
           problem :STOLEN, "The date build #{date} had its number stolen by #{date.number_build}"
           solution("Relink #{date.number} to #{date}") do
-            date.number_build.unlink if date.number_build.symlink? || date.number_build.file?
-            File.symlink date.path.basename.to_s, date.number_build.path.to_s
+            date.number_path.unlink if date.number_path.symlink? || date.number_path.file?
+            File.symlink date.basename.to_s, date.number_path.to_s
           end
           solution("Archive newer build #{date.number_build.date_build}") { archive date.number_build.date_build }
         end
