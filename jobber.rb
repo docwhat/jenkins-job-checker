@@ -91,7 +91,11 @@ class NumberedBuildLink < Build
   end
 
   def date_build
-    @date_build ||= DatedBuild.new path.readlink.relative? ? path.dirname + path.readlink : path.readlink
+    if symlink?
+      @date_build ||= DatedBuild.new(path.readlink.relative? ? path.dirname + path.readlink : path.readlink)
+    else
+      @date_build = nil
+    end
   end
 
   def number_build
@@ -117,7 +121,7 @@ class DatedBuild < Build
   end
 
   def number
-    @number ||= Integer(REXML::XPath.first(build_xml, '/*/number').text)
+    @number ||= build_xml.nil? ? nil : Integer(REXML::XPath.first(build_xml, '/*/number').text)
   end
 
   def date_build
@@ -125,7 +129,7 @@ class DatedBuild < Build
   end
 
   def number_build
-    @date_build ||= NumberedBuildLink.new path.dirname + number.to_s
+    @date_build ||= number.nil? ? nil : NumberedBuildLink.new(path.dirname + number.to_s)
   end
 
   def <=>(other)
@@ -205,6 +209,9 @@ class Job
     end
 
     problems.length > 0
+  rescue
+    $stderr.puts "Error while checking for problems in #{name}"
+    raise
   end
 
   def next_build_number
@@ -278,13 +285,15 @@ class Job
   def test_dates_without_numbers
     missing_links = Set.new(dates) - Set.new(numbers.select(&:symlink?).map(&:date_build))
     missing_links.each do |date|
-      if date.number_build.exist? && date.number_build.date_build != date
-        problem :STOLEN, "The date build #{date} had its number stolen by #{date.number_build}"
-        solution("Relink #{date.number} to #{date}") do
-          date.number_build.unlink if date.number_build.symlink? || date.number_build.file?
-          File.symlink date.path.basename.to_s, date.number_build.path.to_s
+      if date.number && date.number_build.exist? && date.number_build.date_build != date
+        if date.number_build.symlink?
+          problem :STOLEN, "The date build #{date} had its number stolen by #{date.number_build}"
+          solution("Relink #{date.number} to #{date}") do
+            date.number_build.unlink if date.number_build.symlink? || date.number_build.file?
+            File.symlink date.path.basename.to_s, date.number_build.path.to_s
+          end
+          solution("Archive newer build #{date.number_build.date_build}") { archive date.number_build.date_build }
         end
-        solution("Archive newer build #{date.number_build.date_build}") { archive date.number_build.date_build }
       else
         problem :NONUM, "The following date build doesn't have a matching number link: #{date}"
         solution("Archive unlinked #{date}") { archive date }
@@ -373,10 +382,10 @@ class Application
     puts
     if mode == :destroy
       puts '**** SOLUTIONS ****'
-      soln_str = 'Solving with: '
+      soln_str = 'Solving with'
     else
       puts '**** PROBLEMS ****'
-      soln_str = 'Proposal: '
+      soln_str = 'Proposal'
     end
 
     jobs.each do |job|

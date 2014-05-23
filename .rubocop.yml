@@ -10,3 +10,5 @@ Documentation:
   Enabled: false
 LineLength:
   Max: 120
+CyclomaticComplexity:
+  Max: 10
