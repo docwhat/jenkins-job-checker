@@ -38,6 +38,11 @@ better yet, run `jobber.rb --solve` while Jenkins is down.
 See Also:
 ---------
 
+-   [builds getting lost due to
+    GerritTrigger](https://issues.jenkins-ci.org/browse/JENKINS-23152)
+    -   Gerrit Trigger [pull request
+        \#154](https://github.com/jenkinsci/gerrit-trigger-plugin/pull/154)
+
 -   [Builds disappear from build history after
     completion](https://issues.jenkins-ci.org/browse/JENKINS-15156)
 -   [Duplicate build numbers in the Build
