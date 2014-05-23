@@ -60,12 +60,17 @@ class Build
     :unlink,
     :rmtree,
     :readlink,
+    :basename,
     :realpath,
     :realdirpath
   )
 
   def initialize(path)
     @path = path
+  end
+
+  def name
+    "builds/#{basename}"
   end
 
   def hash
@@ -78,6 +83,10 @@ class Build
 
   def to_i
     number
+  end
+
+  def to_s
+    name
   end
 end
 
@@ -98,6 +107,10 @@ class NumberedBuildLink < Build
     end
   end
 
+  def number_path
+    path
+  end
+
   def number_build
     self
   end
@@ -106,8 +119,8 @@ class NumberedBuildLink < Build
     number <=> other.number
   end
 
-  def to_s
-    path.symlink? ? "#{path} -> #{readlink}" : path.to_s
+  def name
+    path.symlink? ? "builds/#{basename} -> #{readlink.basename}" : "builds/#{basename}"
   end
 end
 
@@ -128,16 +141,20 @@ class DatedBuild < Build
     self
   end
 
+  def number_path
+    number ? path.dirname + number.to_s : nil
+  end
+
   def number_build
-    @date_build ||= number.nil? ? nil : NumberedBuildLink.new(path.dirname + number.to_s)
+    if number && number_path.symlink?
+      NumberedBuildLink.new number_path
+    else
+      nil
+    end
   end
 
   def <=>(other)
     time <=> other.time
-  end
-
-  def to_s
-    path.to_s
   end
 
   def build_xml
@@ -289,7 +306,7 @@ class Job
   def test_dates_without_numbers
     missing_links = Set.new(dates) - Set.new(numbers.select(&:symlink?).map(&:date_build))
     missing_links.each do |date|
-      if date.number && date.number_build.exist? && date.number_build.date_build != date
+      if date.number_build && date.number_build.exist? && date.number_build.date_build != date
         if date.number_build.symlink?
           problem :STOLEN, "The date build #{date} had its number stolen by #{date.number_build}"
           solution("Relink #{date.number} to #{date}") do
@@ -299,8 +316,23 @@ class Job
           solution("Archive newer build #{date.number_build.date_build}") { archive date.number_build.date_build }
         end
       else
-        problem :NONUM, "The following date build doesn't have a matching number link: #{date}"
-        solution("Archive unlinked #{date}") { archive date }
+        if date.number_build
+          problem :NONUM, "The #{date} directory is missing the #{date.number} link."
+          solution("Relink #{date.number} to #{date}") do
+            File.symlink date.path.basename.to_s, date.number_build.path.to_s
+          end
+        else
+          if date.number_path
+            problem :NUMBAD, "The #{date.number} is not a symlink."
+            solution("Archive #{date.number} and relink #{date.number} to #{date}") do
+              archive date.number_build
+              File.symlink date.path.basename.to_s, date.number_build.path.to_s
+            end
+          else
+            problem :NONUM, "The #{date} directory isn't well formed."
+            solution("Archive badly formed #{date}") { archive date }
+          end
+        end
       end
     end
   end
