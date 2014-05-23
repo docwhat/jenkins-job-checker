@@ -88,6 +88,10 @@ class Build
   def to_s
     name
   end
+
+  def to_path
+    path
+  end
 end
 
 class NumberedBuildLink < Build
@@ -254,7 +258,6 @@ class Job
   end
 
   def archive(path)
-    path = path.path if path.respond_to? :path
     path.rename(dumping_ground + path.basename)
   end
 
@@ -265,9 +268,15 @@ class Job
   end
 
   def test_last_links_should_be_links
-    links = %w(lastFailedBuild lastStableBuild lastSuccessfulBuild lastUnstableBuild lastUnsuccessfulBuild)
+    links = %w(
+      lastFailedBuild
+      lastStableBuild
+      lastSuccessfulBuild
+      lastUnstableBuild
+      lastUnsuccessfulBuild
+    ).map { |l| builds_path + l }
 
-    links.map { |l| builds_path + l }.select { |p| !p.symlink? && p.exist? }.each do |path|
+    links.reject(&:symlink?).select(&:exist?).each do |path|
       problem :NOTLINK, "#{path} should be a symlink but isn't."
 
       solution("Relink #{path}") do
@@ -316,22 +325,20 @@ class Job
           solution("Archive newer build #{date.number_build.date_build}") { archive date.number_build.date_build }
         end
       else
-        if date.number_build
+        if date.number_build || !date.number_path.symlink?
           problem :NONUM, "The #{date} directory is missing the #{date.number} link."
           solution("Relink #{date.number} to #{date}") do
-            File.symlink date.path.basename.to_s, date.number_build.path.to_s
+            File.symlink date.basename.to_s, date.number_path.to_s
+          end
+        elsif date.number_path
+          problem :NUMBAD, "The #{date.number} file object is not a symlink."
+          solution("Archive #{date.number} and relink #{date.number} to #{date}") do
+            archive date.number_path
+            File.symlink date.basename.to_s, date.number_path.to_s
           end
         else
-          if date.number_path
-            problem :NUMBAD, "The #{date.number} is not a symlink."
-            solution("Archive #{date.number} and relink #{date.number} to #{date}") do
-              archive date.number_build
-              File.symlink date.path.basename.to_s, date.number_build.path.to_s
-            end
-          else
-            problem :NONUM, "The #{date} directory isn't well formed."
-            solution("Archive badly formed #{date}") { archive date }
-          end
+          problem :BADDATE, "The #{date} directory isn't well formed."
+          solution("Archive badly formed #{date}") { archive date }
         end
       end
     end
