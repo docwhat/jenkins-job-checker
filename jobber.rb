@@ -147,15 +147,11 @@ class DatedBuild < Build
   end
 
   def number_path
-    number ? path.dirname + number.to_s : nil
+    @number_path ||= number ? path.dirname + number.to_s : nil
   end
 
   def number_build
-    if number && number_path.symlink?
-      NumberedBuildLink.new number_path
-    else
-      nil
-    end
+    @number_build ||= (number && number_path.symlink?) ?  NumberedBuildLink.new(number_path) : nil
   end
 
   def <=>(other)
