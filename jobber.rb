@@ -259,9 +259,7 @@ class Job
   end
 
   def test_is_a_job_directory
-    unless (path + 'config.xml').exist?
-      problem :NOJOB, "#{path} is not a job directory; 'config.xml' is missing."
-    end
+    problem :NOJOB, "#{path} is not a job directory; 'config.xml' is missing." unless (path + 'config.xml').exist?
   end
 
   def test_last_links_should_be_links
